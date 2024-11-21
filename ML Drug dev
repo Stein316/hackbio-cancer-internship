@@ -1,1 +1,200 @@
+## Hackbio Internship
 
+!pip install chembl-webresource-client
+!pip install rdkit-pypi
+!pip install mordred
+
+# Imported libraries
+import pandas as pd
+from chembl_webresource_client.new_client import new_client
+import numpy as np
+import rdkit
+from rdkit.Chem import Descriptors, Lipinski
+from rdkit.Chem import AllChem
+from rdkit import Chem
+from rdkit.Chem import Descriptors
+from rdkit.ML.Descriptors import MoleculeDescriptors
+from mordred import Calculator, descriptors
+
+# Target search for MRCK beta
+my_target = new_client.target
+my_target_query = my_target.search('MRCK beta')
+
+my_targets = pd.DataFrame.from_dict(my_target_query)
+my_targets
+
+selected_target = my_targets.target_chembl_id[0]
+selected_target
+
+activity = new_client.activity
+data = activity.filter(target_chembl_id=selected_target).filter(standard_type="IC50")
+
+df = pd.DataFrame.from_dict(data)
+
+df.head(5)
+
+df2 = df[df.standard_value.notna()]
+df2 = df2[df.canonical_smiles.notna()]
+
+df2
+
+len(df2.canonical_smiles.unique())
+
+df2_nr = df2.drop_duplicates(['canonical_smiles'])
+df2_nr
+
+Selection = ['molecule_chembl_id','canonical_smiles','standard_value']
+df3 = df2_nr[Selection]
+df3
+
+bioactivity_class = []
+for i in df3.standard_value:
+  if float(i) >= 10000:
+    bioactivity_class.append("inactive")
+  elif float(i) <= 1000:
+    bioactivity_class.append("active")
+  else:
+    bioactivity_class.append("intermediate")
+
+df3.head()
+
+bioactivity_class = pd.Series(bioactivity_class, name='bioactivity_class')
+df4 = pd.concat([df3, bioactivity_class], axis=1)
+df4
+
+from rdkit import Chem
+from rdkit.Chem import Descriptors, Lipinski
+import pandas as pd
+import numpy as np
+
+# Calculations for Lipinski's descriptors
+# Inspired by: https://codeocean.com/explore/capsules?query=tag:data-curation
+def lipinski(smiles, verbose=False):
+
+    moldata= []
+    for elem in smiles:
+        # Check if elem is a valid SMILES string before converting
+        if isinstance(elem, str):
+            mol=Chem.MolFromSmiles(elem)
+            moldata.append(mol)
+
+    baseData= np.arange(1,1)
+    i=0
+    for mol in moldata:
+
+        desc_MolWt = Descriptors.MolWt(mol)
+        desc_MolLogP = Descriptors.MolLogP(mol)
+        desc_NumHDonors = Lipinski.NumHDonors(mol)
+        desc_NumHAcceptors = Lipinski.NumHAcceptors(mol)
+
+        row = np.array([desc_MolWt,
+                        desc_MolLogP,
+                        desc_NumHDonors,
+                        desc_NumHAcceptors])
+
+        if(i==0):
+            baseData=row
+        else:
+            baseData=np.vstack([baseData, row])
+        i=i+1
+
+    columnNames=["MW","LogP","NumHDonors","NumHAcceptors"]
+    descriptors = pd.DataFrame(data=baseData,columns=columnNames)
+
+    return descriptors
+
+df_lipinski = lipinski(df4.canonical_smiles)
+df_lipinski.head()
+
+df_combined = pd.concat([df4,df_lipinski], axis=1)
+
+df_combined.head()
+
+df_combined.standard_value.describe()
+
+# converting IC50 to pIC50
+import numpy as np
+
+def pIC50(input):
+    pIC50 = []
+
+    for i in input['standard_value']:
+        try: # this will try to convert i to a float
+            i = float(i)
+        except ValueError: # if i is not a number, set molar to 0
+            molar = 0
+        molar = i*(10**-9) # Converts nM to M
+        pIC50.append(-np.log10(molar))
+
+    input['pIC50'] = pIC50
+    x = input.drop('standard_value', axis = 1)
+
+    return x
+
+df_final = pIC50(df_combined)
+df_final
+
+df_final.pIC50.describe()
+
+import seaborn as sns
+sns.set(style='ticks')
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(5.5, 6.5))
+
+sns.countplot(x='bioactivity_class', data=df_final, edgecolor='black')
+
+plt.xlabel('Bioactivity class', fontsize=14, fontweight='bold')
+plt.ylabel('Frequency', fontsize=14, fontweight='bold')
+
+plt.savefig('pfht1_plot_bioactivity_class.pdf')
+
+plt.figure(figsize=(5.5, 5.5))
+
+sns.scatterplot(x='MW', y='LogP', data=df_final, size='pIC50', edgecolor='black', alpha=0.7)
+
+plt.xlabel('MW', fontsize=14, fontweight='bold')
+plt.ylabel('LogP', fontsize=14, fontweight='bold')
+plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0)
+#plt.savefig('plot_MW_vs_LogP.pdf')
+
+plt.savefig('plot_MW_vs_LogP.pdf')
+
+def canonical_smiles(smiles):
+    mols = [Chem.MolFromSmiles(s) for s in smiles]
+    smiles = [Chem.MolToSmiles(mol) for mol in mols]
+    return smiles
+
+from rdkit.Chem import Draw
+from rdkit.Chem.Draw import IPythonConsole
+
+Chem.MolFromSmiles('C=CCC')
+
+def RDkit_descriptors(smiles):
+    mols = [Chem.MolFromSmiles(i) for i in smiles]
+    calc = MoleculeDescriptors.MolecularDescriptorCalculator([x[0] for x in Descriptors._descList])
+    desc_names = calc.GetDescriptorNames()
+
+    Mol_descriptors =[]
+    for mol in mols:
+        # add hydrogens to molecules
+        mol=Chem.AddHs(mol)
+        # Calculate all 200 descriptors for each molecule
+        descriptors = calc.CalcDescriptors(mol)
+        Mol_descriptors.append(descriptors)
+    return Mol_descriptors,desc_names
+
+Mol_descriptors,desc_names = RDkit_descriptors(df_final["canonical_smiles"])
+
+df_with_200_descriptors = pd.DataFrame(Mol_descriptors,columns=desc_names)
+df_with_200_descriptors
+
+pIC = df_final["pIC50"]
+
+fp_pIC = pd.concat([df_with_200_descriptors, df_lipinski, pIC], axis=1)
+
+fp_pIC.head()
+
+fp_pIC = fp_pIC.drop('MW', axis=1)
+
+fp_pIC
